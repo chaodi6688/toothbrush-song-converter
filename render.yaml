@@ -7,5 +7,5 @@ services:
     startCommand: python app/server.py
     healthCheckPath: /api/health
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.12.6
+      - key: PYTHONUNBUFFERED
+        value: "1"

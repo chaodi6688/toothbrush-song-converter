@@ -1,0 +1,4 @@
+# 零第三方依赖:仅需 Python 3.9+ 标准库 + numpy + Pillow
+# 如环境中没有 numpy / Pillow:pip install numpy Pillow
+numpy
+Pillow

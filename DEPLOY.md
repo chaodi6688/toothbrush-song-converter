@@ -1,5 +1,15 @@
 # 把本项目部署成在线网站(固定公网链接)
 
+## 已上线(在线版,推荐)
+
+**https://chaodi6688.github.io/toothbrush-song-converter/**
+
+- 托管:GitHub Pages(`docs/` 目录,已提交 `.nojekyll`)
+- 运行方式:纯浏览器本地计算(Pyodide + numpy + Pillow),文件不上传服务器
+- 支持:WAV / MP3 / M4A 音频,PNG / JPG / PDF 乐谱;试听、拖动进度、导出 `.txt` / `.wav`
+- 首次打开需下载识别引擎(约 10 MB,浏览器会缓存),之后打开即可直接使用
+- 源码:https://github.com/chaodi6688/toothbrush-song-converter
+
 本项目是「Python 标准库 HTTP 服务 + numpy/Pillow」,不需要数据库,数据不落盘,
 因此可以直接部署到免费云平台。`app/server.py` 已支持云端注入的 `PORT` 环境变量并监听 `0.0.0.0`。
 

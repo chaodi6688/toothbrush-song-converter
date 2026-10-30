@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>歌曲 → 声波电动牙刷播放格式 转化程序(在线版)</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎵</text></svg>">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="hero">
+    <h1>声波牙刷 · 歌曲播放格式转化器</h1>
+    <p>上传乐谱图片或音频,自动识别音符并转化为电机可播放的 (频率, 时长) 序列,可试听、可导出。</p>
+    <p class="engine-badge" id="engineStatus">识别引擎:未加载(首次转换时自动加载,约 10–30 秒)</p>
+  </header>
+
+  <main>
+    <!-- 上传区:双通道 -->
+    <section class="card upload-section" id="uploadSection">
+      <h2>① 上传素材(二选一)</h2>
+      <div class="upload-cards">
+        <div class="upload-card" id="imageCard" data-type="image">
+          <div class="upload-icon">🎼</div>
+          <h3>上传乐谱图片</h3>
+          <p class="hint">支持 PNG / JPG / PDF,≤ 20 MB</p>
+          <p class="sub-hint">MVP:单声部简谱 / 高音谱五线谱</p>
+          <input type="file" id="imageInput" accept=".png,.jpg,.jpeg,.pdf" hidden>
+          <div class="file-chip" id="imageChip" hidden></div>
+        </div>
+        <div class="upload-card" id="audioCard" data-type="audio">
+          <div class="upload-icon">🎵</div>
+          <h3>上传音频文件</h3>
+          <p class="hint">支持 WAV / MP3 / FLAC / M4A,≤ 50 MB</p>
+          <p class="sub-hint">YIN 单音跟踪,适合纯旋律/人声</p>
+          <input type="file" id="audioInput" accept=".wav,.mp3,.flac,.m4a" hidden>
+          <div class="file-chip" id="audioChip" hidden></div>
+        </div>
+      </div>
+      <div class="sample-row">
+        <button class="btn ghost" id="sampleBtn" type="button">🎧 使用内置示例音频(小星星)</button>
+      </div>
+    </section>
+
+    <!-- 参数区 -->
+    <section class="card">
+      <details id="settingsDetails">
+        <summary><h2>② 高级设置(点击展开)</h2></summary>
+        <div class="settings-grid">
+          <label>目标时长 (秒)
+            <input type="number" id="targetDuration" value="120" min="1" step="0.5">
+          </label>
+          <label>频率下限 (Hz)
+            <input type="number" id="freqMin" value="180" min="50" max="1000" step="1">
+          </label>
+          <label>频率上限 (Hz)
+            <input type="number" id="freqMax" value="400" min="100" max="2000" step="1">
+          </label>
+          <label>BPM 手动覆盖(留空=自动 120)
+            <input type="number" id="bpm" placeholder="120" min="40" max="300" step="1">
+          </label>
+          <label class="checkbox-label"><input type="checkbox" id="loopToggle" checked> 循环衔接(修剪首尾休止)</label>
+          <label class="checkbox-label"><input type="checkbox" id="pitchToggle"> 保持原音调(还原歌曲音调;关闭后映射到 180–400Hz 电机窗口)</label>
+          <label class="checkbox-label"><input type="checkbox" id="mergeRestsToggle" checked> 去除休止符(休止时长并入前一音符)</label>
+        </div>
+      </details>
+    </section>
+
+    <!-- 操作区 -->
+    <section class="card action-section">
+      <button class="btn primary" id="convertBtn" disabled>开始识别并转换</button>
+      <div class="status" id="status" aria-live="polite"></div>
+    </section>
+
+    <!-- 结果预览区 -->
+    <section class="card" id="resultSection" hidden>
+      <h2>③ 识别与转换结果</h2>
+      <div class="result-grid" id="resultStats"></div>
+      <div class="messages" id="messages"></div>
+      <div class="validation-row">
+        <span class="badge" id="durationBadge"></span>
+        <span class="badge" id="freqBadge"></span>
+      </div>
+      <details id="notesDetails" open>
+        <summary>识别音符列表(<span id="noteCountLabel">0</span> 个,显示前 200)</summary>
+        <div class="notes-table-wrap">
+          <table class="notes-table">
+            <thead><tr><th>#</th><th>频率 (Hz)</th><th>起始 (s)</th><th>时长 (s)</th><th>置信度</th></tr></thead>
+            <tbody id="notesBody"></tbody>
+          </table>
+        </div>
+      </details>
+      <details id="seqDetails">
+        <summary>播放序列预览(<span id="eventCountLabel">0</span> 个事件)</summary>
+        <pre class="seq-preview" id="seqPreview"></pre>
+      </details>
+    </section>
+
+    <!-- 试听播放区 -->
+    <section class="card" id="playerSection" hidden>
+      <h2>④ 试听播放(正弦波模拟)</h2>
+      <div class="player-controls">
+        <span class="listen-mode-label">试听内容:</span>
+        <label class="radio-label"><input type="radio" name="listenMode" value="converted" checked> 转换后序列(电机模拟)</label>
+        <label class="radio-label"><input type="radio" name="listenMode" value="recognized"> 识别原旋律(未变调/未量化)</label>
+      </div>
+      <div class="player-controls">
+        <button class="btn" id="playBtn" type="button">▶ 播放</button>
+        <button class="btn" id="pauseBtn" type="button" disabled>⏸ 暂停</button>
+        <button class="btn" id="stopBtn" type="button" disabled>⏹ 停止</button>
+        <button class="btn" id="downloadWavBtn" type="button"
+                title="把当前试听内容导出为 WAV 文件(44.1kHz / 16bit,单次播放长度)">⬇ 下载试听 WAV</button>
+        <label class="checkbox-label inline"><input type="checkbox" id="playerLoop"> 循环播放(验证首尾无缝)</label>
+      </div>
+      <p class="player-note">提示:转换后序列经过 180–400Hz 频率映射与时长量化,音高/节奏可能与原曲不同(这是电机窗口约束);切到「识别原旋律」可确认识别结果本身是否准确。「下载试听 WAV」导出的是当前试听内容(单次播放长度,不含循环重复)。</p>
+      <div class="progress-row">
+        <span id="progressTime">0.0s</span>
+        <div class="progress-bar" id="progressBar" role="slider" tabindex="0"
+             aria-label="播放进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"
+             aria-valuetext="0.0s / 120.0s" title="点击或拖动跳转进度(←/→ 微调)">
+          <div class="progress-fill" id="progressFill"></div>
+          <div class="progress-thumb" id="progressThumb"></div>
+        </div>
+        <span id="totalTime">120.0s</span>
+      </div>
+    </section>
+
+    <!-- 导出区 -->
+    <section class="card export-section" id="exportSection" hidden>
+      <h2>⑤ 导出文件</h2>
+      <div class="export-row">
+        <label class="checkbox-label"><input type="checkbox" id="headerToggle"> 包含元数据头(# 注释行)</label>
+        <button class="btn primary" id="downloadBtn">⬇ 下载 .txt</button>
+        <button class="btn ghost" id="resetBtn">↺ 重新上传</button>
+      </div>
+    </section>
+  </main>
+
+  <footer>所有处理都在你的浏览器里完成,文件不会上传到任何服务器。</footer>
+  <script src="vendor/pdf.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

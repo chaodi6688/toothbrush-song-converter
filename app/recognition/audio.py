@@ -135,10 +135,6 @@ def yin_track(
     if len(y) < frame_len:
         raise AudioDecodeError("音频过短,无法分析(至少需要 0.1 秒)")
 
-    n_frames = 1 + (len(y) - frame_len) // hop
-    frames = np.lib.stride_tricks.sliding_window_view(y, frame_len)[::hop][:n_frames]
-    frames = np.ascontiguousarray(frames, dtype=np.float32)
-
     tau_min = max(2, int(sr / fmax))
     tau_max = min(frame_len // 2 - 1, int(sr / fmin))
     taus = np.arange(tau_min, tau_max + 1)
@@ -146,13 +142,21 @@ def yin_track(
     # 2 倍帧长的 2 次幂,避免循环卷绕
     fft_len = 1 << ((frame_len).bit_length() + 1)
 
+    n_frames = 1 + (len(y) - frame_len) // hop
     f0 = np.zeros(n_frames, dtype=np.float32)
     voiced = np.zeros(n_frames, dtype=bool)
     confidence = np.zeros(n_frames, dtype=np.float32)
 
     batch = 256
     for start in range(0, n_frames, batch):
-        fb = frames[start : start + batch]
+        # 分块构建帧视图:整段滑动窗口视图在 32 位环境(Pyodide)会超出索引上限
+        count = min(batch, n_frames - start)
+        base = start * hop
+        seg = y[base : base + (count - 1) * hop + frame_len]
+        fb = np.ascontiguousarray(
+            np.lib.stride_tricks.sliding_window_view(seg, frame_len)[::hop][:count],
+            dtype=np.float32,
+        )
         autoc = _autocorr_batch(fb, fft_len)[:, : tau_max + 1]
         r0 = autoc[:, :1]
         # 差分函数 d(tau) ≈ 2*(r0 - R(tau));r0==0 表示静音
@@ -166,22 +170,22 @@ def yin_track(
         cmnd = np.where(cum < 1e-12, 1.0, cmnd)
         cmnd[:, 0] = 1.0
 
-        # 第一个低于阈值的局部最小
+        # 第一个低于阈值的局部最小(向量化:避免逐点 Python 循环,
+        # 在浏览器 Pyodide 环境下可把音频识别提速一个数量级以上)
         below = cmnd < threshold
-        has_low = below.any(axis=1)
-        tau_idx = np.full(len(fb), -1, dtype=np.int64)
-
-        # 对每帧找到第一个极小值
-        for i in range(len(fb)):
-            row = cmnd[i]
-            for j in range(1, len(row) - 1):
-                if row[j] < threshold and row[j] <= row[j - 1] and row[j] <= row[j + 1]:
-                    tau_idx[i] = j
-                    break
+        local_min = np.zeros_like(below)
+        local_min[:, 1:-1] = (cmnd[:, 1:-1] <= cmnd[:, :-2]) & (
+            cmnd[:, 1:-1] <= cmnd[:, 2:]
+        )
+        cand = below & local_min
+        cand[:, 0] = False  # 与原实现一致:滞后从 1 开始
+        has_cand = cand.any(axis=1)
+        first = np.argmax(cand, axis=1)
+        tau_idx = np.where(has_cand, first, -1).astype(np.int64)
 
         # 能量低于峰值 2% 判为静音(避免量化噪声/静音被误判为有声)
         energy_thresh = max(0.02 * float(np.max(energy)), 1e-4)
-        valid = has_low & (energy > energy_thresh)
+        valid = has_cand & (energy > energy_thresh)
         idx = np.where(valid)[0]
         if len(idx):
             f0[start + idx] = sr / taus[tau_idx[idx]]
@@ -208,10 +212,19 @@ def _median_smooth(values: np.ndarray, window: int = 5) -> np.ndarray:
 
 
 def frame_energy(y: np.ndarray, frame_len: int = 2048, hop: int = 512) -> np.ndarray:
-    """逐帧 RMS 能量。"""
+    """逐帧 RMS 能量(分块构建视图,兼容 32 位环境)。"""
     n = 1 + (len(y) - frame_len) // hop
-    frames = np.lib.stride_tricks.sliding_window_view(y, frame_len)[::hop][:n]
-    return np.sqrt(np.mean(frames.astype(np.float64) ** 2, axis=1))
+    out = np.empty(n, dtype=np.float64)
+    block = 512
+    for start in range(0, n, block):
+        count = min(block, n - start)
+        base = start * hop
+        seg = y[base : base + (count - 1) * hop + frame_len]
+        win = np.lib.stride_tricks.sliding_window_view(seg, frame_len)[::hop][:count]
+        out[start : start + count] = np.sqrt(
+            np.mean(win.astype(np.float64) ** 2, axis=1)
+        )
+    return out
 
 
 def detect_onsets(
@@ -245,11 +258,21 @@ def detect_onsets(
 
 
 def short_window_energy(y: np.ndarray, win: int = 256, hop: int = 128) -> np.ndarray:
-    """短窗 RMS 能量,用于捕捉音符间细微能量凹陷。"""
+    """短窗 RMS 能量,用于捕捉音符间细微能量凹陷(分块处理)。"""
     if len(y) < win:
         return np.array([float(np.sqrt(np.mean(y.astype(np.float64) ** 2)))])
-    frames = np.lib.stride_tricks.sliding_window_view(y, win)[::hop]
-    return np.sqrt(np.mean(frames.astype(np.float64) ** 2, axis=1))
+    n = 1 + (len(y) - win) // hop
+    out = np.empty(n, dtype=np.float64)
+    block = 4096
+    for start in range(0, n, block):
+        count = min(block, n - start)
+        base = start * hop
+        seg = y[base : base + (count - 1) * hop + win]
+        frames = np.lib.stride_tricks.sliding_window_view(seg, win)[::hop][:count]
+        out[start : start + count] = np.sqrt(
+            np.mean(frames.astype(np.float64) ** 2, axis=1)
+        )
+    return out
 
 
 def detect_valleys(
